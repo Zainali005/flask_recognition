@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pronunciation Test</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 flex items-center justify-center min-h-screen p-5">
+
+    <div class="bg-white dark:bg-gray-800 shadow-lg rounded-2xl p-6 w-full max-w-2xl text-center">
+        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">🎤 Pronunciation Test</h1>
+        <p class="text-gray-600 dark:text-gray-300 mt-2">Read the paragraph below aloud:</p>
+        
+        <div class="mt-4 p-4 bg-gray-100 dark:bg-gray-700 rounded-md">
+            <p id="paragraph" class="text-lg font-medium text-gray-800 dark:text-gray-200">Loading...</p>
+        </div>
+
+        <button onclick="startRecording()" class="mt-6 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-all duration-300">
+            🎙 Start Speaking
+        </button>
+
+        <div class="mt-6 text-left">
+            <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-200">📝 Recognized Speech:</h2>
+            <p id="recognized-text" class="mt-2 text-gray-700 dark:text-gray-300 italic">[Your speech will appear here]</p>
+        </div>
+
+        <p id="result" class="mt-4 text-lg font-medium text-gray-900 dark:text-gray-200"></p>
+    </div>
+
+    <script>
+        async function fetchParagraph() {
+            const response = await fetch("http://127.0.0.1:5000/get-paragraph");
+            const data = await response.json();
+            document.getElementById("paragraph").textContent = data.paragraph;
+        }
+    
+        async function startRecording() {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+            const audioChunks = [];
+    
+            mediaRecorder.ondataavailable = (event) => {
+                audioChunks.push(event.data);
+            };
+    
+            mediaRecorder.onstop = async () => {
+                const webmBlob = new Blob(audioChunks, { type: "audio/webm" });
+    
+                // Convert WebM to WAV
+                const wavBlob = await convertWebMToWav(webmBlob);
+                const formData = new FormData();
+                formData.append("audio", wavBlob, "audio.wav");
+
+                document.getElementById("result").textContent = "⏳ Processing...";
+                document.getElementById("recognized-text").textContent = "Listening... 🎧";
+
+                const response = await fetch("http://127.0.0.1:5000/evaluate", {
+                    method: "POST",
+                    body: formData
+                });
+    
+                const result = await response.json();
+                document.getElementById("recognized-text").textContent =
+                    result.recognized_text ? `🗣 "${result.recognized_text}"` : "❌ Could not understand the audio";
+                document.getElementById("result").textContent =
+                    result.error ? `❌ ${result.error}` : `✅ Accuracy: ${result.accuracy}%`;
+            };
+    
+            mediaRecorder.start();
+            setTimeout(() => mediaRecorder.stop(), 5000);
+        }
+    
+        async function convertWebMToWav(audioBlob) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsArrayBuffer(audioBlob);
+                reader.onloadend = async () => {
+                    const audioContext = new AudioContext();
+                    const audioBuffer = await audioContext.decodeAudioData(reader.result);
+                    const wavBuffer = encodeWAV(audioBuffer);
+                    const wavBlob = new Blob([wavBuffer], { type: "audio/wav" });
+                    resolve(wavBlob);
+                };
+            });
+        }
+    
+        function encodeWAV(audioBuffer) {
+            const numOfChannels = audioBuffer.numberOfChannels;
+            const sampleRate = audioBuffer.sampleRate;
+            const samples = audioBuffer.getChannelData(0);
+            const dataSize = samples.length * 2;
+            const buffer = new ArrayBuffer(44 + dataSize);
+            const view = new DataView(buffer);
+    
+            writeString(view, 0, "RIFF");
+            view.setUint32(4, 36 + dataSize, true);
+            writeString(view, 8, "WAVE");
+            writeString(view, 12, "fmt ");
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, numOfChannels, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * numOfChannels * 2, true);
+            view.setUint16(32, numOfChannels * 2, true);
+            view.setUint16(34, 16, true);
+            writeString(view, 36, "data");
+            view.setUint32(40, dataSize, true);
+    
+            let offset = 44;
+            for (let i = 0; i < samples.length; i++, offset += 2) {
+                view.setInt16(offset, samples[i] * 0x7FFF, true);
+            }
+    
+            return buffer;
+        }
+    
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+    
+        fetchParagraph();
+    </script>
+
+</body>
+</html>
